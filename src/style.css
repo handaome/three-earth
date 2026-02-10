@@ -1,0 +1,32 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #02040b;
+  color: #e6f2ff;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}
+
+canvas {
+  display: block;
+}
+
+#overlay {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  max-width: 320px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(9, 14, 24, 0.78);
+  border: 1px solid rgba(120, 150, 190, 0.4);
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0.2px;
+}
