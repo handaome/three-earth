@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import "./style.css";
 
 const app = document.querySelector("#app");
@@ -35,9 +36,78 @@ console.info("[Earth] renderer", {
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.minDistance = 50;
+controls.minDistance = earthRadius + 20;
 controls.maxDistance = earthRadius * 6;
 controls.zoomSpeed = 1.5;
+controls.enabled = false;
+
+const fpControls = new PointerLockControls(camera, renderer.domElement);
+const pointerNdc = new THREE.Vector2(0, 0);
+const raycaster = new THREE.Raycaster();
+const zoomDirection = new THREE.Vector3();
+
+const MIN_CAMERA_DISTANCE = earthRadius + 20;
+const MAX_CAMERA_DISTANCE = earthRadius * 6;
+const WHEEL_MOVE_SPEED = earthRadius * 0.006;
+const MIN_WHEEL_SPEED = earthRadius * 0.0008;
+
+function clampCameraDistance() {
+  const distance = camera.position.length();
+  if (distance < MIN_CAMERA_DISTANCE) {
+    camera.position.setLength(MIN_CAMERA_DISTANCE);
+  } else if (distance > MAX_CAMERA_DISTANCE) {
+    camera.position.setLength(MAX_CAMERA_DISTANCE);
+  }
+}
+
+renderer.domElement.addEventListener("mousedown", (event) => {
+  if (event.button !== 1) return;
+  fpControls.lock();
+});
+
+renderer.domElement.addEventListener("mouseup", (event) => {
+  if (event.button !== 1) return;
+  fpControls.unlock();
+});
+
+let isRotatingGlobe = false;
+const lastPointer = new THREE.Vector2();
+const globeRotateSpeed = 0.005;
+
+renderer.domElement.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || fpControls.isLocked) return;
+  isRotatingGlobe = true;
+  lastPointer.set(event.clientX, event.clientY);
+});
+
+renderer.domElement.addEventListener("mousemove", (event) => {
+  if (!fpControls.isLocked) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+  if (!isRotatingGlobe || fpControls.isLocked) return;
+  const dx = event.clientX - lastPointer.x;
+  const dy = event.clientY - lastPointer.y;
+  lastPointer.set(event.clientX, event.clientY);
+  globeGroup.rotation.y += dx * globeRotateSpeed;
+  globeGroup.rotation.x += dy * globeRotateSpeed;
+  globeGroup.rotation.x = THREE.MathUtils.clamp(
+    globeGroup.rotation.x,
+    -Math.PI * 0.5 + 0.15,
+    Math.PI * 0.5 - 0.15
+  );
+});
+
+renderer.domElement.addEventListener("mouseup", (event) => {
+  if (event.button !== 0) return;
+  isRotatingGlobe = false;
+});
+
+renderer.domElement.addEventListener("mouseleave", () => {
+  isRotatingGlobe = false;
+});
+
 
 const ambient = new THREE.AmbientLight(0x8fb1d6, 0.75);
 scene.add(ambient);
@@ -76,12 +146,15 @@ const MAX_TILE_ZOOM = 22;
 const ZOOM_CHECK_INTERVAL = 300;
 const TILE_SEGMENTS = 12;
 const TILE_SURFACE_OFFSET = earthRadius * 0.001;
-const ZOOM_CONSTANT = 16 * (earthRadius * 6);
+const TARGET_TILE_PIXEL = 256;
 const MAX_CONCURRENT_TILE_LOADS = 12;
 let activeTileLoads = 0;
 const pendingTileLoads = [];
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
+
+const globeGroup = new THREE.Group();
+scene.add(globeGroup);
 
 const earthGeometry = new THREE.SphereGeometry(earthRadius, 64, 64);
 const earthMaterial = new THREE.MeshStandardMaterial({
@@ -90,7 +163,7 @@ const earthMaterial = new THREE.MeshStandardMaterial({
   metalness: 0.0
 });
 const earthMesh = new THREE.Mesh(earthGeometry, earthMaterial);
-scene.add(earthMesh);
+globeGroup.add(earthMesh);
 
 const atmosphereGeometry = new THREE.SphereGeometry(earthRadius * 1.02, 64, 64);
 const atmosphereMaterial = new THREE.MeshBasicMaterial({
@@ -100,13 +173,41 @@ const atmosphereMaterial = new THREE.MeshBasicMaterial({
   side: THREE.BackSide
 });
 const atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
-scene.add(atmosphere);
+globeGroup.add(atmosphere);
+
+renderer.domElement.addEventListener(
+  "wheel",
+  (event) => {
+    event.preventDefault();
+    const direction = event.deltaY > 0 ? 1 : -1;
+    const distance = camera.position.length();
+    const distanceRatio = THREE.MathUtils.clamp(distance / earthRadius, 0.02, 6);
+    const speed = Math.max(MIN_WHEEL_SPEED, WHEEL_MOVE_SPEED * distanceRatio);
+    const moveDistance = speed * Math.abs(direction);
+
+    if (fpControls.isLocked) {
+      camera.getWorldDirection(zoomDirection);
+    } else {
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObject(earthMesh, false);
+      if (hits.length > 0) {
+        zoomDirection.copy(hits[0].point).sub(camera.position).normalize();
+      } else {
+        zoomDirection.copy(raycaster.ray.direction);
+      }
+    }
+
+    camera.position.addScaledVector(zoomDirection, -direction * moveDistance);
+    clampCameraDistance();
+  },
+  { passive: false }
+);
 
 const stars = createStars(1200, earthRadius * 12);
 scene.add(stars);
 
 const tileGroup = new THREE.Group();
-scene.add(tileGroup);
+globeGroup.add(tileGroup);
 
 const markerGroup = new THREE.Group();
 earthMesh.add(markerGroup);
@@ -353,8 +454,12 @@ function createStars(count, radius) {
 }
 
 function getZoomForDistance(distance) {
-  const altitude = Math.max(distance - earthRadius, 1);
-  const zoom = Math.floor(Math.log2(ZOOM_CONSTANT / altitude));
+  const safeDistance = Math.max(distance, earthRadius + 1);
+  const ratio = earthRadius / safeDistance;
+  const fovRad = THREE.MathUtils.degToRad(camera.fov);
+  const viewHeight = Math.max(window.innerHeight, 1);
+  const desiredAngle = (TARGET_TILE_PIXEL * fovRad) / (ratio * viewHeight);
+  const zoom = Math.floor(Math.log2((Math.PI * 2) / desiredAngle));
   return THREE.MathUtils.clamp(zoom, MIN_TILE_ZOOM, MAX_TILE_ZOOM);
 }
 
@@ -382,7 +487,7 @@ function tileApproxRadius(zoom) {
 
 /**
  * 获取当前视角下应加载的瓦片列表
- * 策略：从相机正下方开始，向外搜索直到超出可见半球
+ * 策略：根据视角覆盖角度推算搜索半径，避免高层级全局加载
  */
 function getVisibleTiles(zoom) {
   const safeZoom = THREE.MathUtils.clamp(zoom, MIN_TILE_ZOOM, MAX_TILE_ZOOM);
@@ -390,12 +495,27 @@ function getVisibleTiles(zoom) {
 
   // 相机方向 → 中心瓦片
   const camDir = camera.position.clone().normalize();
-  const centerLat = THREE.MathUtils.radToDeg(Math.asin(camDir.y));
-  const centerLon = THREE.MathUtils.radToDeg(Math.atan2(camDir.z, camDir.x));
+  const localCamDir = camDir
+    .clone()
+    .applyQuaternion(globeGroup.quaternion.clone().invert());
+  const centerLat = THREE.MathUtils.radToDeg(Math.asin(localCamDir.y));
+  const centerLon = THREE.MathUtils.radToDeg(
+    Math.atan2(localCamDir.z, localCamDir.x)
+  );
   const { x: cx, y: cy } = lonLatToTile(centerLon, centerLat, safeZoom);
 
-  // 搜索半径：低层级搜整个半球，高层级限制范围以保性能
-  const searchR = Math.min(Math.ceil(n / 2), Math.max(8, Math.ceil(n * 0.3)));
+  // 视角覆盖角度（球面角度）
+  const safeDistance = Math.max(camera.position.length(), earthRadius + 1);
+  const ratio = earthRadius / safeDistance;
+  const fovRad = THREE.MathUtils.degToRad(camera.fov);
+  const aspect = camera.aspect || window.innerWidth / window.innerHeight;
+  const vSpan = 2 * Math.asin(Math.min(1, Math.tan(fovRad / 2) * ratio));
+  const hSpan = 2 * Math.asin(Math.min(1, Math.tan(fovRad / 2) * aspect * ratio));
+  const span = Math.max(vSpan, hSpan);
+
+  const tileAngle = (Math.PI * 2) / n;
+  const tilesAcross = Math.max(4, Math.ceil((span / tileAngle) * 1.2));
+  const searchR = Math.min(Math.ceil(n / 2), Math.max(4, Math.ceil(tilesAcross / 2)));
 
   const visible = [];
 
@@ -406,11 +526,12 @@ function getVisibleTiles(zoom) {
       const tx = ((cx + dx) % n + n) % n;
       const center = tileCenterWorld(tx, ty, safeZoom);
 
-      // 背面剔除：瓦片法线与相机方向点积 < 阈值 则跳过
-      const dotVal = center.x * camDir.x + center.y * camDir.y + center.z * camDir.z;
-      // center 长度约为 earthRadius，归一化后比较
+      const dotVal =
+        center.x * localCamDir.x +
+        center.y * localCamDir.y +
+        center.z * localCamDir.z;
       const normalizedDot = dotVal / (earthRadius + TILE_SURFACE_OFFSET);
-      if (normalizedDot < -0.2) continue;
+      if (normalizedDot < 0) continue;
 
       visible.push({ z: safeZoom, x: tx, y: ty });
     }
@@ -480,7 +601,6 @@ function animate() {
     lastZoomCheck = now;
   }
 
-  controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
