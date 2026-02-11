@@ -30,3 +30,17 @@ canvas {
   line-height: 1.4;
   letter-spacing: 0.2px;
 }
+
+#hud {
+  position: fixed;
+  left: 24px;
+  top: 24px;
+  max-width: 360px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(6, 12, 22, 0.75);
+  border: 1px solid rgba(120, 150, 190, 0.35);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+}

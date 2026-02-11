@@ -2,6 +2,19 @@
 
 This project renders a rotating Earth in Three.js using Tianditu imagery tiles.
 
+## Cesium-style demo notes
+
+- Adds a subtle atmosphere glow and emissive base to improve limb contrast.
+- Shows a lightweight HUD with zoom, tile stats, and camera distance.
+- Auto-rotates when idle to keep the globe alive.
+
+### Controls
+
+- Left drag: rotate globe
+- Middle mouse: pointer-lock fly
+- Wheel: zoom toward cursor
+- H: toggle HUD
+
 ## Configure Tianditu token
 
 Create a `.env` file in the project root:
