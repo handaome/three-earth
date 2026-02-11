@@ -13,7 +13,7 @@
  * - rotateVertical(camera, angle): 带 constrainedAxis 极点保护（Camera.js:2082）
  * - rotateHorizontal(camera, angle): 绕 constrainedAxis 旋转（Camera.js:2168）
  * - rotate3D: rotateRate × windowRatio × π 系数（SSCC.js:2025）
- * - pan3D: pickEllipsoid 两点 → worldToCameraCoordinates → 叉积旋转（SSCC.js:2102）
+ * - pan3D: pickEllipsoid 两点 → 世界坐标下分解角度（3D 模式 worldToCameraCoordinates 为 no-op）（SSCC.js:2102）
  * - tilt3DOnEllipsoid: eastNorthUpToFixedFrame → rotate3D(UNIT_Z)（SSCC.js:2454）
  * - look3D: getPickRay → acos(dot(startDir, endDir))（SSCC.js:2737）
  * - handleZoom: zoomRate = zoomFactor × (distance - minHeight)（SSCC.js:559）
@@ -57,6 +57,9 @@ const MINIMUM_ROTATE_RATE = 1.0 / 5000.0;
 
 /** 最小缩放速率 — SSCC.js:350 _minimumZoomRate = 20.0 */
 const MINIMUM_ZOOM_RATE = 20.0;
+
+/** 进入地形碰撞/倾斜路径的最小高度 — SSCC.js:252 minimumCollisionTerrainHeight */
+const MINIMUM_COLLISION_TERRAIN_HEIGHT = 15000.0;
 
 /** 高轨道切换到 look 的高度阈值 — SSCC.js:265 minimumTrackBallHeight */
 const MINIMUM_TRACKBALL_HEIGHT = EARTH_RADIUS * 1.175;
@@ -204,6 +207,101 @@ function rotateVertical(camera: THREE.PerspectiveCamera, angle: number): void {
 }
 
 /**
+ * 在局部坐标系中执行 rotate3D（等价 Cesium rotate3D）
+ */
+function rotate3DLocal(
+  movement: Movement,
+  canvas: HTMLCanvasElement,
+  localPos: THREE.Vector3,
+  localDir: THREE.Vector3,
+  localUp: THREE.Vector3,
+  constrainedAxis: THREE.Vector3 | null,
+  rotateOnlyVertical: boolean,
+  rotateOnlyHorizontal: boolean,
+): void {
+  const rho = localPos.length();
+  let rotateRate = 1.0 * (rho - 1.0);
+  rotateRate = THREE.MathUtils.clamp(
+    rotateRate,
+    MINIMUM_ROTATE_RATE,
+    MAXIMUM_ROTATE_RATE,
+  );
+
+  let phiWindowRatio = (movement.startX - movement.endX) / canvas.clientWidth;
+  let thetaWindowRatio = (movement.startY - movement.endY) / canvas.clientHeight;
+  phiWindowRatio = Math.min(phiWindowRatio, MAXIMUM_MOVEMENT_RATIO);
+  thetaWindowRatio = Math.min(thetaWindowRatio, MAXIMUM_MOVEMENT_RATIO);
+
+  const deltaPhi = rotateRate * phiWindowRatio * Math.PI * 2.0;
+  const deltaTheta = rotateRate * thetaWindowRatio * Math.PI;
+
+  if (!rotateOnlyVertical) {
+    const axis = constrainedAxis ?? localUp;
+    _rotateQuat.setFromAxisAngle(axis, deltaPhi);
+    _rotateMat3.setFromMatrix4(
+      new THREE.Matrix4().makeRotationFromQuaternion(_rotateQuat),
+    );
+    localPos.applyMatrix3(_rotateMat3);
+    localDir.applyMatrix3(_rotateMat3);
+    localUp.applyMatrix3(_rotateMat3);
+  }
+
+  if (!rotateOnlyHorizontal) {
+    const localRight = _scratchVec3A.crossVectors(localDir, localUp).normalize();
+
+    if (constrainedAxis && localPos.lengthSq() > EPSILON6) {
+      const p = _scratchVec3B.copy(localPos).normalize();
+      const northParallel = p.distanceTo(constrainedAxis) < EPSILON2;
+      const negAxis = _scratchVec3C.copy(constrainedAxis).negate();
+      const southParallel = p.distanceTo(negAxis) < EPSILON2;
+
+      let clampedTheta = -deltaTheta;
+
+      if (!northParallel && !southParallel) {
+        let dot = p.dot(constrainedAxis);
+        let angleToAxis = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
+        if (clampedTheta > 0 && clampedTheta > angleToAxis) {
+          clampedTheta = angleToAxis - EPSILON4;
+        }
+        dot = p.dot(negAxis);
+        angleToAxis = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
+        if (clampedTheta < 0 && -clampedTheta > angleToAxis) {
+          clampedTheta = -angleToAxis + EPSILON4;
+        }
+
+        const tangent = _scratchVec3D.crossVectors(constrainedAxis, p);
+        if (tangent.lengthSq() > EPSILON14) {
+          tangent.normalize();
+          _rotateQuat.setFromAxisAngle(tangent, -clampedTheta);
+          _rotateMat3.setFromMatrix4(
+            new THREE.Matrix4().makeRotationFromQuaternion(_rotateQuat),
+          );
+          localPos.applyMatrix3(_rotateMat3);
+          localDir.applyMatrix3(_rotateMat3);
+          localUp.applyMatrix3(_rotateMat3);
+        }
+      } else if ((northParallel && clampedTheta < 0) || (southParallel && clampedTheta > 0)) {
+        _rotateQuat.setFromAxisAngle(localRight, -clampedTheta);
+        _rotateMat3.setFromMatrix4(
+          new THREE.Matrix4().makeRotationFromQuaternion(_rotateQuat),
+        );
+        localPos.applyMatrix3(_rotateMat3);
+        localDir.applyMatrix3(_rotateMat3);
+        localUp.applyMatrix3(_rotateMat3);
+      }
+    } else {
+      _rotateQuat.setFromAxisAngle(localRight, deltaTheta);
+      _rotateMat3.setFromMatrix4(
+        new THREE.Matrix4().makeRotationFromQuaternion(_rotateQuat),
+      );
+      localPos.applyMatrix3(_rotateMat3);
+      localDir.applyMatrix3(_rotateMat3);
+      localUp.applyMatrix3(_rotateMat3);
+    }
+  }
+}
+
+/**
  * Camera.prototype.look(axis, angle)
  * @see Camera.js:1965-1985
  *
@@ -244,6 +342,8 @@ function decay(time: number, coefficient: number): number {
  * 射线发射工具 — 对应 Cesium camera.getPickRay
  */
 function getPickRay(camera: THREE.PerspectiveCamera, ndcX: number, ndcY: number): THREE.Ray {
+  // Ensure matrixWorld is current after lookAt/position changes.
+  camera.updateMatrixWorld(true);
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
   return raycaster.ray;
@@ -265,6 +365,32 @@ function rayEllipsoid(ray: THREE.Ray, radius: number): THREE.Vector3 | null {
   if (t < 0) t = -b + sqrtD;
   if (t < 0) return null;
   return origin.clone().addScaledVector(direction, t);
+}
+
+/**
+ * 射线-球体求交区间（返回 tStart/tStop）
+ */
+function rayEllipsoidInterval(
+  ray: THREE.Ray,
+  radius: number,
+): { start: number; stop: number } | null {
+  const origin = ray.origin;
+  const direction = ray.direction;
+  const b = origin.dot(direction);
+  const c = origin.dot(origin) - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant < 0) return null;
+  const sqrtD = Math.sqrt(discriminant);
+  let t0 = -b - sqrtD;
+  let t1 = -b + sqrtD;
+  if (t0 > t1) {
+    const tmp = t0;
+    t0 = t1;
+    t1 = tmp;
+  }
+  if (t1 < 0) return null;
+  if (t0 < 0) t0 = t1;
+  return { start: t0, stop: t1 };
 }
 
 /**
@@ -291,11 +417,11 @@ function pixelToNdc(x: number, y: number, canvas: HTMLCanvasElement): THREE.Vect
 }
 
 /**
- * 世界坐标变换到相机坐标 — 对应 Cesium camera.worldToCameraCoordinates
- * 用于 pan3D 中的叉积旋转计算
+ * Cesium 3D 模式下 _actualTransform = IDENTITY，worldToCameraCoordinates 等价于 no-op。
+ * 这里保留函数以对齐术语，但不做坐标变换，避免误导。
  */
-function worldToCameraCoordinates(camera: THREE.PerspectiveCamera, point: THREE.Vector3): THREE.Vector3 {
-  return point.clone().applyMatrix4(camera.matrixWorldInverse);
+function worldToCameraCoordinates(_camera: THREE.PerspectiveCamera, point: THREE.Vector3): THREE.Vector3 {
+  return point.clone();
 }
 
 // ==================== CameraController 主类 ====================
@@ -358,6 +484,9 @@ export class CameraController {
    * tilt3D 状态 — 对应 SSCC.js:326-327
    */
   private readonly _tiltCenterMousePosition = { x: -1, y: -1 };
+  private readonly _tiltCenter = new THREE.Vector3();
+  private _tiltOnEllipsoid = false;
+  private _looking = false;
 
   /**
    * rotateFactor / rotateRateRangeAdjustment — SSCC.js:345-346
@@ -738,6 +867,32 @@ export class CameraController {
   private _tilt3D(movement: Movement): void {
     if (!this.enableTilt || !this.enableInputs) return;
 
+    if (
+      movement.startX !== this._tiltCenterMousePosition.x ||
+      movement.startY !== this._tiltCenterMousePosition.y
+    ) {
+      this._tiltOnEllipsoid = false;
+      this._looking = false;
+      this._tiltCenterMousePosition.x = movement.startX;
+      this._tiltCenterMousePosition.y = movement.startY;
+    }
+
+    if (this._looking) {
+      this._look3D(movement);
+      return;
+    }
+
+    const height = this.camera.position.length() - EARTH_RADIUS;
+    if (this._tiltOnEllipsoid || height > MINIMUM_COLLISION_TERRAIN_HEIGHT) {
+      this._tiltOnEllipsoid = true;
+      this._tilt3DOnEllipsoid(movement);
+      return;
+    }
+
+    this._tilt3DOnTerrain(movement);
+  }
+
+  private _tilt3DOnEllipsoid(movement: Movement): void {
     const camera = this.camera;
     const canvas = this.domElement;
 
@@ -763,6 +918,8 @@ export class CameraController {
       }
       return;
     }
+
+    this._tiltCenter.copy(center);
 
     // === 等价 Cesium 的 camera._setTransform(enuTransform) + rotate3D(UNIT_Z) ===
     //
@@ -867,6 +1024,151 @@ export class CameraController {
     // Three.js 适配: 将 ENU 变换后的 direction 应用到相机四元数
     _scratchVec3D.addVectors(camera.position, localDir);
     camera.lookAt(_scratchVec3D);
+  }
+
+  private _tilt3DOnTerrain(movement: Movement): void {
+    const camera = this.camera;
+    const canvas = this.domElement;
+
+    let center: THREE.Vector3 | null;
+    if (
+      movement.startX === this._tiltCenterMousePosition.x &&
+      movement.startY === this._tiltCenterMousePosition.y
+    ) {
+      center = this._tiltCenter.clone();
+    } else {
+      const startNdc = pixelToNdc(movement.startX, movement.startY, canvas);
+      center = pickEllipsoidAtNdc(camera, startNdc.x, startNdc.y, GLOBE_RADIUS);
+
+      if (!center) {
+        const ray = getPickRay(camera, startNdc.x, startNdc.y);
+        const intersection = rayEllipsoidInterval(ray, GLOBE_RADIUS);
+        if (!intersection) {
+          const height = camera.position.length() - EARTH_RADIUS;
+          if (height <= MINIMUM_TRACKBALL_HEIGHT) {
+            this._looking = true;
+            this._look3D(movement);
+            this._tiltCenterMousePosition.x = movement.startX;
+            this._tiltCenterMousePosition.y = movement.startY;
+          }
+          return;
+        }
+        center = ray.origin
+          .clone()
+          .addScaledVector(ray.direction, intersection.start);
+      }
+
+      this._tiltCenterMousePosition.x = movement.startX;
+      this._tiltCenterMousePosition.y = movement.startY;
+      this._tiltCenter.copy(center);
+    }
+
+    const verticalNdc = pixelToNdc(
+      canvas.clientWidth / 2,
+      this._tiltCenterMousePosition.y,
+      canvas,
+    );
+    const verticalRay = getPickRay(camera, verticalNdc.x, verticalNdc.y);
+    const mag = center.length();
+    const verticalIntersection = rayEllipsoidInterval(verticalRay, mag);
+    if (!verticalIntersection) return;
+
+    const t =
+      verticalRay.origin.length() > mag
+        ? verticalIntersection.start
+        : verticalIntersection.stop;
+    const verticalCenter = verticalRay.origin
+      .clone()
+      .addScaledVector(verticalRay.direction, t);
+
+    const centerNormal = _scratchVec3A.copy(center).normalize();
+    const east = _scratchVec3B.crossVectors(CONSTRAINED_AXIS, centerNormal);
+    if (east.lengthSq() < EPSILON6) {
+      east.set(1, 0, 0);
+    }
+    east.normalize();
+    const north = _scratchVec3C.crossVectors(centerNormal, east);
+
+    const enuToWorld = new THREE.Matrix4().makeBasis(east, north, centerNormal);
+    enuToWorld.setPosition(center);
+    const worldToEnu = enuToWorld.clone().invert();
+
+    const verticalNormal = _scratchVec3A.copy(verticalCenter).normalize();
+    const vEast = _scratchVec3B.crossVectors(CONSTRAINED_AXIS, verticalNormal);
+    if (vEast.lengthSq() < EPSILON6) {
+      vEast.set(1, 0, 0);
+    }
+    vEast.normalize();
+    const vNorth = _scratchVec3C.crossVectors(verticalNormal, vEast);
+
+    const verticalToWorld = new THREE.Matrix4().makeBasis(vEast, vNorth, verticalNormal);
+    verticalToWorld.setPosition(verticalCenter);
+    const worldToVertical = verticalToWorld.clone().invert();
+
+    camera.getWorldDirection(_scratchVec3D);
+    const right = _scratchVec3A
+      .crossVectors(_scratchVec3D, camera.up)
+      .normalize();
+    const tangent = _scratchVec3B.crossVectors(verticalCenter, camera.position);
+    const dot = right.dot(tangent);
+    const movementDelta = movement.startY - movement.endY;
+    let constrainedAxis: THREE.Vector3 | null = new THREE.Vector3(0, 0, 1);
+    if (dot < 0.0 && movementDelta > 0.0) {
+      constrainedAxis = null;
+    }
+
+    const localPosV = camera.position.clone().applyMatrix4(worldToVertical);
+    const localDirV = _scratchVec3D.clone().transformDirection(worldToVertical);
+    const localUpV = camera.up.clone().transformDirection(worldToVertical);
+
+    rotate3DLocal(
+      movement,
+      canvas,
+      localPosV,
+      localDirV,
+      localUpV,
+      constrainedAxis,
+      true,
+      false,
+    );
+
+    camera.position.copy(localPosV.applyMatrix4(verticalToWorld));
+    camera.up
+      .copy(
+        localUpV.transformDirection(verticalToWorld.clone().setPosition(0, 0, 0)),
+      )
+      .normalize();
+    const worldDirV = localDirV
+      .transformDirection(verticalToWorld.clone().setPosition(0, 0, 0))
+      .normalize();
+    _scratchVec3C.addVectors(camera.position, worldDirV);
+    camera.lookAt(_scratchVec3C);
+
+    camera.getWorldDirection(_scratchVec3D);
+    const localPosC = camera.position.clone().applyMatrix4(worldToEnu);
+    const localDirC = _scratchVec3D.clone().transformDirection(worldToEnu);
+    const localUpC = camera.up.clone().transformDirection(worldToEnu);
+
+    rotate3DLocal(
+      movement,
+      canvas,
+      localPosC,
+      localDirC,
+      localUpC,
+      new THREE.Vector3(0, 0, 1),
+      false,
+      true,
+    );
+
+    camera.position.copy(localPosC.applyMatrix4(enuToWorld));
+    camera.up
+      .copy(localUpC.transformDirection(enuToWorld.clone().setPosition(0, 0, 0)))
+      .normalize();
+    const worldDirC = localDirC
+      .transformDirection(enuToWorld.clone().setPosition(0, 0, 0))
+      .normalize();
+    _scratchVec3C.addVectors(camera.position, worldDirC);
+    camera.lookAt(_scratchVec3C);
   }
 
   // ==================== look3D（SSCC.js:2737-2857）====================
@@ -1099,6 +1401,8 @@ export class CameraController {
       this._tiltInertia = null;
       this._tiltCenterMousePosition.x = -1;
       this._tiltCenterMousePosition.y = -1;
+      this._tiltOnEllipsoid = false;
+      this._looking = false;
     }
   };
 

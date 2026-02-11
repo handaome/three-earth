@@ -8,6 +8,7 @@ This project renders a rotating Earth in Three.js using Tianditu imagery tiles.
 - Shows a lightweight HUD with zoom, tile stats, and camera distance.
 - Auto-rotates when idle to keep the globe alive.
 - Keeps camera orientation north-up so the globe stays under view without locking rotation.
+- pan3D follows Cesium 3D behavior: angle decomposition happens in world coordinates.
 
 ### Controls
 
