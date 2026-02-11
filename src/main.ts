@@ -125,7 +125,7 @@ function focusCameraOnLonLat(lon: number, lat: number, altitude = EARTH_RADIUS *
   // lookAt 球心，让相机朝向地球中心
   camera.lookAt(0, 0, 0);
   // 保持 up 向量与约束轴一致（北向朝上）
-  camera.up.set(0, 1, 0);
+  camera.up.set(0, 0, 1);
 }
 
 // ==================== 渲染循环 ====================

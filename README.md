@@ -1,39 +1,38 @@
 # Three Earth (Tianditu)
 
-This project renders a rotating Earth in Three.js using Tianditu imagery tiles.
+本项目使用 Three.js 与天地图影像瓦片渲染一个可旋转的地球。
 
-## Cesium-style demo notes
+## Cesium 风格演示说明
 
-- Adds a subtle atmosphere glow and emissive base to improve limb contrast.
-- Shows a lightweight HUD with zoom, tile stats, and camera distance.
-- Auto-rotates when idle to keep the globe alive.
-- Keeps camera orientation north-up so the globe stays under view without locking rotation.
-- pan3D follows Cesium 3D behavior: angle decomposition happens in world coordinates.
+- 添加了轻微的大气辉光与自发光底色，提升地球边缘对比度。
+- 显示轻量 HUD，包含缩放级别、瓦片统计与相机距离。
+- 空闲时自动旋转，让地球保持“活跃”。
+- 保持相机北向朝上，既能围绕地球观察又不锁死旋转。
+- pan3D 遵循 Cesium 3D 行为：角度分解在世界坐标系完成。
 
-### Controls
+### 控制方式
 
-- Left drag: rotate globe
-- Middle drag: tilt
-- Right drag: zoom
-- Wheel: zoom toward cursor
-- H: toggle HUD
+- 左键拖拽：旋转地球
+- 中键拖拽：倾斜视角
+- 滚轮：朝向鼠标位置缩放
+- H：切换 HUD
 
-## Configure Tianditu token
+## 配置天地图 Token
 
-Create a `.env` file in the project root:
+在项目根目录创建 `.env` 文件：
 
 ```
 VITE_TDT_TOKEN=your_tianditu_token
 ```
 
-Optional overrides:
+可选覆盖配置：
 
 ```
 VITE_TDT_BASE_URL=https://t0.tianditu.gov.cn
 ```
 
-In development, the project uses a Vite proxy at `/tdt` to avoid CORS. See
-[docs/tianditu-cors.md](docs/tianditu-cors.md) for details.
+开发环境使用 Vite 代理 `/tdt` 以避免 CORS。详情见
+[docs/tianditu-cors.md](docs/tianditu-cors.md)。
 
 ## 经纬度定位
 
@@ -46,7 +45,7 @@ focusCameraOnLonLat(116.391, 39.907, 2.2);
 
 更多说明见 [docs/geo-location.md](docs/geo-location.md)。
 
-## Scripts
+## 脚本
 
 - `npm install`
 - `npm run dev`

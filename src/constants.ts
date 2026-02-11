@@ -58,11 +58,11 @@ export const MIN_TILT_ANGLE = 0.05;
 /** 最大倾斜角度 */
 export const MAX_TILT_ANGLE = Math.PI * 0.5 - 0.02;
 
-/** 世界北方向 */
-export const WORLD_NORTH = new THREE.Vector3(0, 1, 0);
+/** 世界北方向（Cesium ECEF: Z 轴朝北） */
+export const WORLD_NORTH = new THREE.Vector3(0, 0, 1);
 
-/** 世界东方向 */
-export const WORLD_EAST = new THREE.Vector3(1, 0, 0);
+/** 世界东方向（Cesium ECEF: Y 轴朝东） */
+export const WORLD_EAST = new THREE.Vector3(0, 1, 0);
 
 /** 相机 up 向量精度阈值 */
 export const CAMERA_UP_EPSILON = 1e-6;

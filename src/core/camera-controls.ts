@@ -64,8 +64,8 @@ const MINIMUM_COLLISION_TERRAIN_HEIGHT = 15000.0;
 /** 高轨道切换到 look 的高度阈值 — SSCC.js:265 minimumTrackBallHeight */
 const MINIMUM_TRACKBALL_HEIGHT = EARTH_RADIUS * 1.175;
 
-/** 约束轴 — 对应 Cesium constrainedAxis = Cartesian3.UNIT_Z（Cesium 用 Z 朝上） */
-const CONSTRAINED_AXIS = new THREE.Vector3(0, 1, 0);
+/** 约束轴 — 对应 Cesium constrainedAxis = Cartesian3.UNIT_Z（Z 朝北） */
+const CONSTRAINED_AXIS = new THREE.Vector3(0, 0, 1);
 
 /** 数值精度 — 对应 Cesium CesiumMath.EPSILONX */
 const EPSILON2 = 1e-2;
@@ -546,6 +546,8 @@ export class CameraController {
     this._rotateRateRangeAdjustment = EARTH_RADIUS;
 
     this._processInertia();
+    // 防止相机穿过球面
+    this.clampCameraDistance();
     this._maintainUpVector();
   }
 

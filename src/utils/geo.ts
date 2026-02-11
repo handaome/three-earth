@@ -25,7 +25,7 @@ export function lonLatToTile(lon: number, lat: number, zoom: number): TileGridPo
 }
 
 /**
- * 经纬度 → 三维世界坐标
+ * 经纬度 → 三维世界坐标（Cesium 风格 ECEF，Z 朝上）
  * @param lon 经度
  * @param lat 纬度
  * @param radius 球体半径
@@ -37,8 +37,8 @@ export function lonLatToWorld(lon: number, lat: number, radius: number): THREE.V
   const lonRad = THREE.MathUtils.degToRad(lon);
   return new THREE.Vector3(
     radius * Math.cos(latRad) * Math.cos(lonRad),
-    radius * Math.sin(latRad),
-    radius * Math.cos(latRad) * Math.sin(lonRad)
+    radius * Math.cos(latRad) * Math.sin(lonRad),
+    radius * Math.sin(latRad)
   );
 }
 
@@ -73,7 +73,7 @@ export function tileCenterWorld(x: number, y: number, zoom: number): THREE.Vecto
   const r = EARTH_RADIUS + TILE_SURFACE_OFFSET;
   return new THREE.Vector3(
     r * Math.cos(latRad) * Math.cos(lonRad),
-    r * Math.sin(latRad),
-    r * Math.cos(latRad) * Math.sin(lonRad)
+    r * Math.cos(latRad) * Math.sin(lonRad),
+    r * Math.sin(latRad)
   );
 }

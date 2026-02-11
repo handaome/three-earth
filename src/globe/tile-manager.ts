@@ -442,8 +442,8 @@ export function createTileGeometry(bounds: TileBounds, segments: number): THREE.
       const radius = EARTH_RADIUS + TILE_SURFACE_OFFSET;
 
       const x = radius * Math.cos(latRad) * Math.cos(lonRad);
-      const y = radius * Math.sin(latRad);
-      const z = radius * Math.cos(latRad) * Math.sin(lonRad);
+      const y = radius * Math.cos(latRad) * Math.sin(lonRad);
+      const z = radius * Math.sin(latRad);
 
       vertices.push(x, y, z);
       uvs.push(u, 1 - v);
