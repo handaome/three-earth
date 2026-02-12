@@ -6,6 +6,9 @@ import * as THREE from "three";
 import { EARTH_RADIUS, TILE_SURFACE_OFFSET } from "../constants";
 import type { TileBounds, TileGridPosition } from "../types";
 
+/** WebMercator 最大可投影纬度（度） */
+const WEB_MERCATOR_MAX_LAT = 85.05112878;
+
 /**
  * 经纬度 → 瓦片坐标
  * @param lon 经度（-180~180）
@@ -15,13 +18,38 @@ import type { TileBounds, TileGridPosition } from "../types";
  */
 export function lonLatToTile(lon: number, lat: number, zoom: number): TileGridPosition {
   const n = 2 ** zoom;
-  const clampedLat = THREE.MathUtils.clamp(lat, -85.05112878, 85.05112878);
+  const clampedLat = THREE.MathUtils.clamp(lat, -WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT);
   const x = Math.floor(((lon + 180) / 360) * n);
   const latRad = THREE.MathUtils.degToRad(clampedLat);
   const y = Math.floor(
     ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n
   );
   return { x, y, n };
+}
+
+/**
+ * ECEF（Cesium/本项目）笛卡尔坐标 → 经纬度（度）
+ * 对齐 Cesium Cartographic.fromCartesian：
+ * - lon = atan2(y, x)
+ * - lat = asin(z / |p|)
+ */
+export function cartesianToLonLat(cartesian: THREE.Vector3): { lon: number; lat: number } {
+  const p = cartesian;
+  const mag = p.length();
+  if (mag <= 0) return { lon: 0, lat: 0 };
+  const lon = THREE.MathUtils.radToDeg(Math.atan2(p.y, p.x));
+  const lat = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(p.z / mag, -1, 1)));
+  return { lon, lat };
+}
+
+/** WebMercator: latitude(rad) -> y (无量纲) */
+export function mercatorYFromLatRad(latRad: number): number {
+  return Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+}
+
+/** WebMercator: y -> latitude(rad) */
+export function latRadFromMercatorY(mercatorY: number): number {
+  return 2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2;
 }
 
 /**
@@ -66,9 +94,13 @@ export function tileToLonLatBounds(x: number, y: number, zoom: number): TileBoun
  */
 export function tileCenterWorld(x: number, y: number, zoom: number): THREE.Vector3 {
   const bounds = tileToLonLatBounds(x, y, zoom);
-  const lat = (bounds.latMin + bounds.latMax) / 2;
   const lon = (bounds.lonMin + bounds.lonMax) / 2;
-  const latRad = THREE.MathUtils.degToRad(lat);
+  // WebMercator 中点：用 mercatorY 的中点再逆投影回纬度
+  const latMinRad = THREE.MathUtils.degToRad(bounds.latMin);
+  const latMaxRad = THREE.MathUtils.degToRad(bounds.latMax);
+  const mercYMin = mercatorYFromLatRad(latMinRad);
+  const mercYMax = mercatorYFromLatRad(latMaxRad);
+  const latRad = latRadFromMercatorY((mercYMin + mercYMax) * 0.5);
   const lonRad = THREE.MathUtils.degToRad(lon);
   const r = EARTH_RADIUS + TILE_SURFACE_OFFSET;
   return new THREE.Vector3(

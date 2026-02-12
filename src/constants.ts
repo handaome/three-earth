@@ -14,8 +14,13 @@ export const TILE_SURFACE_OFFSET = EARTH_RADIUS * 0.001;
 
 // ==================== 相机参数 ====================
 
-/** 相机最近距离（地球表面 + 20m） */
-export const MIN_CAMERA_DISTANCE = EARTH_RADIUS + 20;
+/**
+ * 相机最近距离（瓦片表面 + 20m）
+ *
+ * 注意：本项目的底图瓦片渲染在 `EARTH_RADIUS + TILE_SURFACE_OFFSET`，
+ * 若最小距离仅按 `EARTH_RADIUS` 计算，相机会“钻进瓦片球面内部”，表现为近地不可看且可穿地。
+ */
+export const MIN_CAMERA_DISTANCE = EARTH_RADIUS + TILE_SURFACE_OFFSET + 20;
 
 /** 相机最远距离（6 倍地球半径） */
 export const MAX_CAMERA_DISTANCE = EARTH_RADIUS * 6;
@@ -115,9 +120,6 @@ export const MIN_TILE_ZOOM = 3;
 /** 瓦片最大缩放级别 */
 export const MAX_TILE_ZOOM = 22;
 
-/** 安全最大缩放级别（防止过度加载） */
-export const SAFE_MAX_ZOOM = 11;
-
 /** 瓦片细分片段数 */
 export const TILE_SEGMENTS = 12;
 
@@ -144,6 +146,15 @@ export const MAX_MESHES_PER_UPDATE = 60;
 
 /** 全局最大瓦片 mesh 数 */
 export const MAX_TOTAL_TILE_MESHES = 180;
+
+/**
+ * 安全最大缩放级别（防止过度加载）
+ *
+ * 说明：本项目是“按视野估算 + 强上限”的简化策略，不是 Cesium 完整的四叉树 SSE。
+ * 若上限过低（例如 11/14），会出现贴近地表但 zoom 上不去；
+ * 这里提高到一个更合理的默认值，仍由 MAX_* 预算（并发/缓存/可见瓦片数）约束实际加载。
+ */
+export const SAFE_MAX_ZOOM = 18;
 
 // ==================== 天地图配置 ====================
 

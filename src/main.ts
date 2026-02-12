@@ -137,11 +137,14 @@ function animate(): void {
   cameraController.update();
 
   // 计算距离与高度
+  // 注意：底图瓦片渲染在 EARTH_RADIUS + TILE_SURFACE_OFFSET，近地体验/裁剪必须以“瓦片表面高度”为准
   const distance = camera.position.length();
+  const surfaceRadius = EARTH_RADIUS + TILE_SURFACE_OFFSET;
   const altitude = Math.max(distance - EARTH_RADIUS, 0);
+  const surfaceAltitude = Math.max(distance - surfaceRadius, 0);
 
-  // 更新天空
-  skyManager.update(altitude, scene, camera);
+  // 更新天空（更贴近地表时用 surfaceAltitude，避免 TILE_SURFACE_OFFSET 带来的高度偏差）
+  skyManager.update(surfaceAltitude, scene, camera);
 
   // 瓦片 zoom 级别计算
   const desiredZoom = tileManager.getZoomForDistance(distance, camera);
@@ -200,8 +203,9 @@ function animate(): void {
 
   // 动态 near/far 调整
   if (now - lastZoomCheck > ZOOM_CHECK_INTERVAL) {
-    const alt = Math.max(distance - EARTH_RADIUS, 1);
-    camera.near = Math.max(alt * 0.1, 1);
+    // Cesium 风格：near 不能大于“相机到最近地表”的量级，否则会把地球表面切掉
+    const alt = Math.max(surfaceAltitude, 1);
+    camera.near = Math.max(alt * 0.1, 0.5);
     camera.far = Math.max(EARTH_RADIUS * 50, distance * 10);
     camera.updateProjectionMatrix();
     lastZoomCheck = now;

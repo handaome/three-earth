@@ -29,7 +29,7 @@ import {
 
 // ==================== 常量（严格对应 Cesium ScreenSpaceCameraController 源码值） ====================
 
-/** 球体半径（用于射线求交） */
+/** 球体半径（瓦片表面，用于射线求交/高度判断） */
 const GLOBE_RADIUS = EARTH_RADIUS + TILE_SURFACE_OFFSET;
 
 /**
@@ -47,22 +47,22 @@ const INERTIA_MAX_CLICK_TIME = 0.4;
 const MAXIMUM_MOVEMENT_RATIO = 0.1;
 
 /** 缩放因子 — SSCC.js:147 zoomFactor = 5.0 */
-const ZOOM_FACTOR = 5.0;
+const ZOOM_FACTOR = 5;
 
 /** 旋转速度最大值 — SSCC.js:348 _maximumRotateRate = 1.77 */
 const MAXIMUM_ROTATE_RATE = 1.77;
 
 /** 旋转速度最小值 — SSCC.js:349 _minimumRotateRate = 1.0 / 5000.0 */
-const MINIMUM_ROTATE_RATE = 1.0 / 5000.0;
+const MINIMUM_ROTATE_RATE = 1 / 5000;
 
 /** 最小缩放速率 — SSCC.js:350 _minimumZoomRate = 20.0 */
-const MINIMUM_ZOOM_RATE = 20.0;
+const MINIMUM_ZOOM_RATE = 20;
 
 /** 进入地形碰撞/倾斜路径的最小高度 — SSCC.js:252 minimumCollisionTerrainHeight */
-const MINIMUM_COLLISION_TERRAIN_HEIGHT = 15000.0;
+const MINIMUM_COLLISION_TERRAIN_HEIGHT = 15000;
 
 /** 高轨道切换到 look 的高度阈值 — SSCC.js:265 minimumTrackBallHeight */
-const MINIMUM_TRACKBALL_HEIGHT = EARTH_RADIUS * 1.175;
+const MINIMUM_TRACKBALL_HEIGHT = GLOBE_RADIUS * 1.175;
 
 /** 约束轴 — 对应 Cesium constrainedAxis = Cartesian3.UNIT_Z（Z 朝北） */
 const CONSTRAINED_AXIS = new THREE.Vector3(0, 0, 1);
@@ -232,7 +232,7 @@ function rotate3DLocal(
   rotateOnlyHorizontal: boolean,
 ): void {
   const rho = localPos.length();
-  let rotateRate = 1.0 * (rho - 1.0);
+  let rotateRate = (rho - 1.0);
   rotateRate = THREE.MathUtils.clamp(
     rotateRate,
     MINIMUM_ROTATE_RATE,
@@ -585,8 +585,8 @@ export class CameraController {
    * rotateFactor / rotateRateRangeAdjustment — SSCC.js:345-346
    * update3D 中计算: rotateFactor = 1.0 / radius; rotateRateRangeAdjustment = radius
    */
-  private _rotateFactor = 1.0 / EARTH_RADIUS;
-  private _rotateRateRangeAdjustment = EARTH_RADIUS;
+  private _rotateFactor = 1.0 / GLOBE_RADIUS;
+  private _rotateRateRangeAdjustment = GLOBE_RADIUS;
 
   /** 惯性状态 */
   private _spinInertia: InertiaState | null = null;
@@ -614,7 +614,7 @@ export class CameraController {
   getCameraTarget(): THREE.Vector3 {
     const picked = this.pickGlobeTarget();
     if (picked) return picked;
-    return this.camera.position.clone().normalize().multiplyScalar(EARTH_RADIUS);
+    return this.camera.position.clone().normalize().multiplyScalar(GLOBE_RADIUS);
   }
 
   /** 限制相机距离 */
@@ -635,8 +635,9 @@ export class CameraController {
     // 对应 update3D 中的 rotateFactor 计算（SSCC.js:2860 之前）
     // Cesium 在 ScreenSpaceCameraController.prototype.update 的 adjustHeightForTerrain 之前
     // 调用 update3D，其中会设置 _rotateFactor
-    this._rotateFactor = 1.0 / EARTH_RADIUS;
-    this._rotateRateRangeAdjustment = EARTH_RADIUS;
+    // Cesium: radius = ellipsoid.maximumRadius
+    this._rotateFactor = 1.0 / GLOBE_RADIUS;
+    this._rotateRateRangeAdjustment = GLOBE_RADIUS;
 
     this._processInertia();
     // 防止相机穿过球面
@@ -692,7 +693,7 @@ export class CameraController {
       this._pan3D(startPosition, movement);
     } else {
       // 检查高度决定 rotate3D 还是 look3D
-      const height = camera.position.length() - EARTH_RADIUS;
+      const height = camera.position.length() - GLOBE_RADIUS;
       if (height > MINIMUM_TRACKBALL_HEIGHT) {
         this._spinRotating = true;
         this._rotate3D(startPosition, movement);
@@ -886,7 +887,7 @@ export class CameraController {
 
     // === zoom3D 部分: 计算 distanceMeasure ===
     // Cesium: 优先用 pickPosition 的距离，否则用 height
-    const height = camera.position.length() - EARTH_RADIUS;
+    const height = camera.position.length() - GLOBE_RADIUS;
     // 对齐 Cesium zoom3D: windowPosition 默认为屏幕中心（地下模式例外）
     const windowRay = getPickRay(camera, 0, 0);
     const windowIntersection = rayEllipsoid(windowRay, GLOBE_RADIUS);
@@ -1007,7 +1008,7 @@ export class CameraController {
       return;
     }
 
-    const height = this.camera.position.length() - EARTH_RADIUS;
+    const height = this.camera.position.length() - GLOBE_RADIUS;
     if (this._tiltOnEllipsoid || height > MINIMUM_COLLISION_TERRAIN_HEIGHT) {
       this._tiltOnEllipsoid = true;
       this._tilt3DOnEllipsoid(startPosition, movement);
@@ -1022,7 +1023,7 @@ export class CameraController {
     const canvas = this.domElement;
 
     // Cesium: height < minHeight check（SSCC.js:2462-2469）
-    const height = camera.position.length() - EARTH_RADIUS;
+    const height = camera.position.length() - GLOBE_RADIUS;
     const minHeight = this.minimumZoomDistance * 0.25;
     if (
       height - minHeight - 1.0 < EPSILON3 &&
@@ -1113,7 +1114,7 @@ export class CameraController {
         const ray = getPickRay(camera, startNdc.x, startNdc.y);
         const intersection = rayEllipsoidInterval(ray, GLOBE_RADIUS);
         if (!intersection) {
-          const height = camera.position.length() - EARTH_RADIUS;
+          const height = camera.position.length() - GLOBE_RADIUS;
           if (height <= MINIMUM_TRACKBALL_HEIGHT) {
             this._looking = true;
             this._look3D(startPosition, movement, this._getSurfaceUp());

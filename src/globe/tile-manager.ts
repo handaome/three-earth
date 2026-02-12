@@ -21,11 +21,53 @@ import {
   MAX_TOTAL_TILE_MESHES,
   TDT_TOKEN,
   TDT_BASE_URL,
-  MIN_CAMERA_DISTANCE,
 } from "../constants";
 import type { TileBounds, TileCoord, VisibleTile } from "../types";
-import { lonLatToTile, tileToLonLatBounds, tileCenterWorld } from "../utils/geo";
+import {
+  cartesianToLonLat,
+  latRadFromMercatorY,
+  lonLatToTile,
+  mercatorYFromLatRad,
+  tileToLonLatBounds,
+  tileCenterWorld,
+} from "../utils/geo";
 import { formatBytes } from "../utils/format";
+
+const _scratchViewDir = new THREE.Vector3();
+const _scratchRaycaster = new THREE.Raycaster();
+const _scratchNdc = new THREE.Vector2();
+const _scratchPickRay = new THREE.Ray();
+const _scratchPickPoint = new THREE.Vector3();
+const _scratchTileCenterDir = new THREE.Vector3();
+
+function getPickRayAtNdc(
+  camera: THREE.PerspectiveCamera,
+  ndcX: number,
+  ndcY: number,
+  outRay: THREE.Ray,
+): THREE.Ray {
+  _scratchNdc.set(ndcX, ndcY);
+  camera.updateMatrixWorld(true);
+  _scratchRaycaster.setFromCamera(_scratchNdc, camera);
+  outRay.origin.copy(_scratchRaycaster.ray.origin);
+  outRay.direction.copy(_scratchRaycaster.ray.direction);
+  return outRay;
+}
+
+/** 射线-球体求交（返回最近的正向交点） */
+function raySphereIntersection(ray: THREE.Ray, radius: number, out: THREE.Vector3): THREE.Vector3 | null {
+  const origin = ray.origin;
+  const direction = ray.direction;
+  const b = origin.dot(direction);
+  const c = origin.dot(origin) - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant < 0) return null;
+  const sqrtD = Math.sqrt(discriminant);
+  let t = -b - sqrtD;
+  if (t < 0) t = -b + sqrtD;
+  if (t < 0) return null;
+  return out.copy(origin).addScaledVector(direction, t);
+}
 
 /**
  * TileManager 管理瓦片的生命周期：加载、创建、显示、回收。
@@ -203,15 +245,18 @@ export class TileManager {
    * 根据相机距离计算合适的 zoom 级别
    */
   getZoomForDistance(distance: number, camera: THREE.PerspectiveCamera): number {
-    const altitude = Math.max(distance - EARTH_RADIUS, 1);
+    // 对齐 Cesium 语义：LOD 应以“到地表”的距离为准。
+    // 本项目地表瓦片在 EARTH_RADIUS + TILE_SURFACE_OFFSET，因此用 surfaceAltitude。
+    const surfaceRadius = EARTH_RADIUS + TILE_SURFACE_OFFSET;
+    const altitude = Math.max(distance - surfaceRadius, 1);
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const viewHeight = Math.max(window.innerHeight, 1);
     const projectedPixelAngle = fovRad / viewHeight;
     const tileGroundSize = altitude * projectedPixelAngle * TARGET_TILE_PIXEL;
     const zoom = Math.floor(
-      Math.log2((Math.PI * 2 * EARTH_RADIUS) / Math.max(tileGroundSize, 1))
+      Math.log2((Math.PI * 2 * surfaceRadius) / Math.max(tileGroundSize, 1))
     );
-    return THREE.MathUtils.clamp(zoom, MIN_TILE_ZOOM, SAFE_MAX_ZOOM);
+    return THREE.MathUtils.clamp(zoom, MIN_TILE_ZOOM, Math.min(MAX_TILE_ZOOM, SAFE_MAX_ZOOM));
   }
 
   /**
@@ -226,27 +271,52 @@ export class TileManager {
     const safeZoom = THREE.MathUtils.clamp(zoom, MIN_TILE_ZOOM, MAX_TILE_ZOOM);
     const n = 2 ** safeZoom;
 
+    // 对齐 Cesium：将视线落点/相机位置转换到“globe local(ECEF)”后再求经纬度
+    // Cartographic.fromCartesian: lon=atan2(y,x), lat=asin(z/|p|)
     const viewTarget = pickGlobeTarget();
-    const viewDir = (viewTarget ?? camera.position)
+    const viewLocal = (viewTarget ?? camera.position)
       .clone()
-      .normalize()
       .applyQuaternion(globeQuatInverse);
-    const centerLat = THREE.MathUtils.radToDeg(Math.asin(viewDir.y));
-    const centerLon = THREE.MathUtils.radToDeg(Math.atan2(viewDir.z, viewDir.x));
+    const { lon: centerLon, lat: centerLat } = cartesianToLonLat(viewLocal);
+
+    const viewDir = _scratchViewDir.copy(viewLocal).normalize();
     const { x: cx, y: cy } = lonLatToTile(centerLon, centerLat, safeZoom);
 
     const safeDistance = Math.max(camera.position.length(), EARTH_RADIUS + 1);
-    const ratio = EARTH_RADIUS / safeDistance;
-    const fovRad = THREE.MathUtils.degToRad(camera.fov);
-    const aspect = camera.aspect || window.innerWidth / window.innerHeight;
-    const vSpan = 2 * Math.asin(Math.min(1, Math.tan(fovRad / 2) * ratio));
-    const hSpan = 2 * Math.asin(Math.min(1, Math.tan(fovRad / 2) * aspect * ratio));
-    const span = Math.max(vSpan, hSpan);
-    const maxAngle = Math.min(Math.PI * 0.7, span * 0.6);
+    const globeRadius = EARTH_RADIUS + TILE_SURFACE_OFFSET;
 
+    // === Cesium 风格：用视锥射线与球体求交，估算当前帧实际可见的地表中心角范围 ===
+    // 远距离时，经验公式会把 maxAngle 压得过小，导致只加载中心附近的少量瓦片。
+    // 这里采样屏幕四角+边中点，取交点相对 viewDir 的最大角度作为 maxAngle。
+    const ndcSamples: Array<[number, number]> = [
+      [-1, -1], [1, -1], [-1, 1], [1, 1],
+      [0, -1], [0, 1], [-1, 0], [1, 0],
+    ];
+
+    let maxAngle = 0;
+    let hitCount = 0;
+    for (const [nx, ny] of ndcSamples) {
+      const ray = getPickRayAtNdc(camera, nx, ny, _scratchPickRay);
+      const hit = raySphereIntersection(ray, globeRadius, _scratchPickPoint);
+      if (!hit) continue;
+      hitCount += 1;
+      const hitLocal = _scratchTileCenterDir.copy(hit).applyQuaternion(globeQuatInverse).normalize();
+      const angle = Math.acos(THREE.MathUtils.clamp(hitLocal.dot(viewDir), -1, 1));
+      if (angle > maxAngle) maxAngle = angle;
+    }
+
+    // 如果边界射线没命中（例如地球很小/仅中心射线命中），用“可见地平线中心角”作为保底
+    // 该角度满足：cos(theta) = R / d
+    if (hitCount === 0 || maxAngle < 1e-6) {
+      maxAngle = Math.acos(THREE.MathUtils.clamp(globeRadius / safeDistance, -1, 1));
+    }
+
+    // 给一点余量，避免边缘缺瓦（近似 Cesium 的 bounding volume 余量）
     const tileAngle = (Math.PI * 2) / n;
-    const tilesAcross = Math.max(3, Math.ceil((maxAngle / tileAngle) * 1.6));
-    const searchR = Math.min(Math.ceil(n / 2), tilesAcross);
+    maxAngle = Math.min(Math.PI / 2, maxAngle + tileAngle * 0.75);
+
+    // 以 maxAngle 推导搜索半径（至少覆盖整个可见范围）
+    const searchR = Math.min(Math.ceil(n / 2), Math.max(2, Math.ceil(maxAngle / tileAngle) + 2));
 
     const visible: VisibleTile[] = [];
 
@@ -255,10 +325,10 @@ export class TileManager {
       if (ty < 0 || ty >= n) continue;
       for (let dx = -searchR; dx <= searchR; dx += 1) {
         const tx = ((cx + dx) % n + n) % n;
-        const center = tileCenterWorld(tx, ty, safeZoom);
+        // tileCenterWorld 返回的是 ECEF 世界坐标，需转换到 globe local 再与 viewLocal 比较
+        const center = tileCenterWorld(tx, ty, safeZoom).applyQuaternion(globeQuatInverse);
 
-        const dotVal =
-          center.x * viewDir.x + center.y * viewDir.y + center.z * viewDir.z;
+        const dotVal = center.x * viewDir.x + center.y * viewDir.y + center.z * viewDir.z;
         const normalizedDot = dotVal / (EARTH_RADIUS + TILE_SURFACE_OFFSET);
         if (normalizedDot < 0) continue;
 
@@ -430,10 +500,20 @@ export function createTileGeometry(bounds: TileBounds, segments: number): THREE.
   const uvs: number[] = [];
   const indices: number[] = [];
 
+  // === 关键：WebMercator 影像瓦片不能按“纬度线性插值”直接贴到球面 ===
+  // Cesium 的 WebMercatorTilingScheme 本质上是在 Mercator Y 上均匀分割。
+  // 这里按 Mercator Y 采样，然后逆墨卡托得到纬度，确保底图不发生投影错位。
+  const latMinRad = THREE.MathUtils.degToRad(latMin);
+  const latMaxRad = THREE.MathUtils.degToRad(latMax);
+  const mercYMin = mercatorYFromLatRad(latMinRad);
+  const mercYMax = mercatorYFromLatRad(latMaxRad);
+  const mercYRange = mercYMax - mercYMin || 1;
+
   for (let iy = 0; iy <= heightSegments; iy += 1) {
     const v = iy / heightSegments;
-    const lat = THREE.MathUtils.lerp(latMax, latMin, v);
-    const latRad = THREE.MathUtils.degToRad(lat);
+    // north->south：mercY 从 max 到 min
+    const mercY = THREE.MathUtils.lerp(mercYMax, mercYMin, v);
+    const latRad = latRadFromMercatorY(mercY);
 
     for (let ix = 0; ix <= widthSegments; ix += 1) {
       const u = ix / widthSegments;
@@ -446,7 +526,9 @@ export function createTileGeometry(bounds: TileBounds, segments: number): THREE.
       const z = radius * Math.sin(latRad);
 
       vertices.push(x, y, z);
-      uvs.push(u, 1 - v);
+      // vUv.y：对齐 Three.js flipY 语义（北侧=1，南侧=0），同时按 Mercator Y 映射
+      const vUv = (mercY - mercYMin) / mercYRange;
+      uvs.push(u, vUv);
     }
   }
 
