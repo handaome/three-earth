@@ -45,7 +45,7 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(0, 0, EARTH_RADIUS * INITIAL_CAMERA_DISTANCE_FACTOR);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -205,8 +205,8 @@ function animate(): void {
   if (now - lastZoomCheck > ZOOM_CHECK_INTERVAL) {
     // Cesium 风格：near 不能大于“相机到最近地表”的量级，否则会把地球表面切掉
     const alt = Math.max(surfaceAltitude, 1);
-    camera.near = Math.max(alt * 0.1, 0.5);
-    camera.far = Math.max(EARTH_RADIUS * 50, distance * 10);
+    camera.near = THREE.MathUtils.clamp(alt * 0.002, 0.1, 50);
+    camera.far = Math.max(EARTH_RADIUS * 14, distance + EARTH_RADIUS * 4);
     camera.updateProjectionMatrix();
     lastZoomCheck = now;
   }

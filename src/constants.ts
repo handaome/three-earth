@@ -9,8 +9,8 @@ import * as THREE from "three";
 /** 地球半径（米） */
 export const EARTH_RADIUS = 6371000;
 
-/** 瓦片贴图相对地球表面的偏移量，避免 z-fighting */
-export const TILE_SURFACE_OFFSET = EARTH_RADIUS * 0.001;
+/** 瓦片贴图相对地球表面的偏移量（0=直接贴地表） */
+export const TILE_SURFACE_OFFSET = 0;
 
 // ==================== 相机参数 ====================
 
@@ -115,13 +115,25 @@ export const SKY_FOG_COLOR = new THREE.Color(0x9fd1ff);
 // ==================== 瓦片系统参数 ====================
 
 /** 瓦片最小缩放级别 */
-export const MIN_TILE_ZOOM = 3;
+export const MIN_TILE_ZOOM = 1;
 
 /** 瓦片最大缩放级别 */
 export const MAX_TILE_ZOOM = 22;
 
 /** 瓦片细分片段数 */
 export const TILE_SEGMENTS = 12;
+
+/** 低层级（父级兜底）不使用裙边，避免出现大面积拉伸三角面 */
+export const TILE_SKIRT_DISABLE_UNDER_ZOOM = 2;
+
+/** 低层级瓦片裙边高度（米） */
+export const TILE_SKIRT_HEIGHT_LOW_ZOOM = 8;
+
+/** 中层级瓦片裙边高度（米） */
+export const TILE_SKIRT_HEIGHT_MID_ZOOM = 4;
+
+/** 高层级瓦片裙边高度（米） */
+export const TILE_SKIRT_HEIGHT_HIGH_ZOOM = 2;
 
 /** 瓦片目标像素尺寸 */
 export const TARGET_TILE_PIXEL = 256;
@@ -150,9 +162,9 @@ export const MAX_TOTAL_TILE_MESHES = 180;
 /**
  * 安全最大缩放级别（防止过度加载）
  *
- * 说明：本项目是“按视野估算 + 强上限”的简化策略，不是 Cesium 完整的四叉树 SSE。
- * 若上限过低（例如 11/14），会出现贴近地表但 zoom 上不去；
- * 这里提高到一个更合理的默认值，仍由 MAX_* 预算（并发/缓存/可见瓦片数）约束实际加载。
+ * 说明：当前已采用 Cesium 风格的四叉树 SSE 进行细化选择。
+ * 该值只作为工程保护上限，避免极端视角下请求/网格数量失控；
+ * 实际层级由每帧 SSE 误差判定决定。
  */
 export const SAFE_MAX_ZOOM = 18;
 
@@ -168,6 +180,21 @@ export const DEFAULT_TDT_BASE_URL = import.meta.env.DEV
 
 /** 天地图 API 地址 */
 export const TDT_BASE_URL = import.meta.env.VITE_TDT_BASE_URL || DEFAULT_TDT_BASE_URL;
+
+// ==================== Cesium 地形配置 ====================
+
+/** 是否启用 Cesium quantized-mesh 地形（默认关闭） */
+export const ENABLE_CESIUM_TERRAIN =
+  String(import.meta.env.VITE_ENABLE_CESIUM_TERRAIN || "").toLowerCase() === "true";
+
+/** Cesium 地形服务地址（不带末尾斜杠） */
+export const CESIUM_TERRAIN_BASE_URL = import.meta.env.VITE_CESIUM_TERRAIN_BASE_URL || "";
+
+/** Cesium 地形服务访问 Token（可选） */
+export const CESIUM_TERRAIN_TOKEN = import.meta.env.VITE_CESIUM_TERRAIN_TOKEN || "";
+
+/** 地形夸张倍率（默认 1，即真实高程） */
+export const TERRAIN_EXAGGERATION = Number(import.meta.env.VITE_TERRAIN_EXAGGERATION || 1);
 
 // ==================== 默认位置 ====================
 

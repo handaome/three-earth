@@ -74,6 +74,7 @@ export class EarthBuilder {
       metalness: 0,
       emissive: new THREE.Color(0x05080f),
       emissiveIntensity: 0.35,
+      depthWrite: false,
     });
     this.earthMesh = new THREE.Mesh(earthGeometry, earthMaterial);
     this.globeGroup.add(this.earthMesh);
